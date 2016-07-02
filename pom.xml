@@ -6,12 +6,12 @@
     <parent>
         <groupId>org.jenkins-ci.plugins</groupId>
         <artifactId>plugin</artifactId>
-    <version>2.3</version>
+    <version>2.9</version>
     <relativePath/>
   </parent>
   <groupId>gionee</groupId>
   <artifactId>gionee-plugin</artifactId>
-  <version>1.1-SNAPSHOT</version>
+  <version>1.2-SNAPSHOT</version>
   <packaging>hpi</packaging>
 
 

@@ -59,5 +59,8 @@ public abstract class Constants {
 
     /** JDBC Driver Name: PostgreSQL */
     public static final String JDBC_DRIVER_NAME_POSTGRESQL = "org.postgresql.Driver";
+    
+    /** JDBC Driver Name: PostgreSQL */
+    public static final String REDMINEURL = "http://127.0.0.1/redmine";
 
 }
