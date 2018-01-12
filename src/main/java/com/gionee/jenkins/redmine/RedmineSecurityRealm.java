@@ -15,7 +15,7 @@ import org.jfree.util.Log;
 import hudson.Extension;
 import hudson.model.Descriptor;
 
-import com.gionee.jenkins.redmine.util.CipherUtil;
+
 import com.gionee.jenkins.redmine.util.Constants;
 
 import jenkins.security.SecurityListener;
