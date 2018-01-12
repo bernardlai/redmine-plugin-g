@@ -166,18 +166,18 @@ public class RedmineSecurityRealm extends SecurityRealm {
         // immediate deallocation of all system resources
         httpclient.close();
 
-        String login = extract(content ,"name");
+        String name = extract(content ,"name");
 
-        if (StringUtils.isNotBlank(login)) {
+        if (StringUtils.isNotBlank(name)) {
 
             // only set the access token if it exists.
-            RedmineAuthenticationToken auth = new RedmineAuthenticationToken(login);
+            RedmineAuthenticationToken auth = new RedmineAuthenticationToken(name);
             SecurityContextHolder.getContext().setAuthentication(auth);
 
             //GitlabUser self = auth.getMyself();
             User user = User.current();
             if (user != null) {
-                user.setFullName(extract(content ,"login"));
+                user.setFullName(extract(content ,"username"));
                 //LOGGER.info(user.getApi());
                 //user.setApiToken(extract(content ,"access_token"));
                 // Set email from gitlab only if empty
@@ -304,7 +304,6 @@ public class RedmineSecurityRealm extends SecurityRealm {
         @Override
         public String getDisplayName() {
             return "Redmine User Auth";
-            //return Messages.RedmineSecurityRealm_DisplayName();
         }
     }
 
