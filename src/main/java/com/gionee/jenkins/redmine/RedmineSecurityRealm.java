@@ -1,109 +1,300 @@
 package com.gionee.jenkins.redmine;
 
-import hudson.Extension;
-import hudson.model.Descriptor;
-import com.gionee.jenkins.redmine.dao.*;
-import com.gionee.jenkins.redmine.util.CipherUtil;
-import com.gionee.jenkins.redmine.util.Constants;
-import hudson.security.AbstractPasswordBasedSecurityRealm;
-import hudson.security.GroupDetails;
-import hudson.security.SecurityRealm;
 
+import java.io.IOException;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.logging.Logger;
+import org.jfree.util.Log;
 
+
+import hudson.Extension;
+import hudson.model.Descriptor;
+
+import com.gionee.jenkins.redmine.util.CipherUtil;
+import com.gionee.jenkins.redmine.util.Constants;
+
+import jenkins.security.SecurityListener;
+import org.acegisecurity.Authentication;
 import org.acegisecurity.AuthenticationException;
-import org.acegisecurity.GrantedAuthority;
+import org.acegisecurity.AuthenticationManager;
+import org.acegisecurity.BadCredentialsException;
+import org.acegisecurity.context.SecurityContextHolder;
 import org.acegisecurity.providers.UsernamePasswordAuthenticationToken;
-import org.acegisecurity.providers.dao.AbstractUserDetailsAuthenticationProvider;
 import org.acegisecurity.userdetails.UserDetails;
+import org.acegisecurity.userdetails.UserDetailsService;
 import org.acegisecurity.userdetails.UsernameNotFoundException;
+
+import org.acegisecurity.GrantedAuthority;
+
+import org.apache.commons.httpclient.URIException;
+import org.apache.commons.httpclient.util.ParameterParser;
 import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.builder.HashCodeBuilder;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpHost;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.client.utils.URLEncodedUtils;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.http.message.BasicNameValuePair;
+
 import org.kohsuke.stapler.DataBoundConstructor;
+import org.kohsuke.stapler.Header;
+import org.kohsuke.stapler.HttpRedirect;
+import org.kohsuke.stapler.HttpResponse;
+import org.kohsuke.stapler.HttpResponses;
+import org.kohsuke.stapler.StaplerRequest;
 import org.springframework.dao.DataAccessException;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import hudson.model.User;
+import hudson.security.AbstractPasswordBasedSecurityRealm;
+import hudson.security.GroupDetails;
+import hudson.security.SecurityRealm;
+import hudson.ProxyConfiguration;
+import jenkins.model.Jenkins;
 
 /**
  * @author Yasuyuki Saito
  */
-public class RedmineSecurityRealm extends AbstractPasswordBasedSecurityRealm {
+public class RedmineSecurityRealm extends SecurityRealm {
 
     /** Logger */
     private static final Logger LOGGER = Logger.getLogger(RedmineSecurityRealm.class.getName());
 
-    /** Redmine DBMS */
-    private final String dbms;
+    private String redmineWebUri;
+    private String redmineApiUri;
+    private String clientID;
+    private String clientSecret;
 
-    /** DB Server */
-    private final String dbServer;
-
-    /** Database Name */
-    private final String databaseName;
-
-    /** Database Port */
-    private final String port;
-
-    /** Database UserName */
-    private final String dbUserName;
-
-    /** Database Password */
-    private final String dbPassword;
-
-    /** Redmine Version */
-    private final String version;
-
-    /** Redmine Login Table */
-    private final String loginTable;
-
-    /** Redmine User Field */
-    private final String userField;
-
-    /** Redmine Password Field */
-    private final String passField;
-
-    /** Redmine Salt Field */
-    private final String saltField;
-    
-    /** Redmine Api Token */
-    private final String apiToken;
     /**
-     * Constructor
-     * @param dbms         Redmine DBMS
-     * @param dbServer     DB Server
-     * @param databaseName Database Name
-     * @param port         Database Port
-     * @param dbUserName   Database UserName
-     * @param dbPassword   Database Password
-     * @param version      Redmine Version
-     * @param loginTable   Redmine Login Table
-     * @param userField    Redmine User Field
-     * @param passField    Redmine Password Field
-     * @param saltField    Redmine Salt Field
+     * @param redmineWebUri
+     *            The URI to the root of the web UI for Redmine .
+     * @param redmineApiUri
+     *            The URI to the root of the API for Redmine .
+     * @param clientID
+     *            The client ID for the created OAuth Application.
+     * @param clientSecret
+     *            The client secret for the created Redmine OAuth Application.
      */
+    
     @DataBoundConstructor
-    public RedmineSecurityRealm(String dbms, String dbServer, String databaseName, String port, String dbUserName, String dbPassword,
-            String version, String loginTable, String userField, String passField, String saltField, String apiToken) {
+    public RedmineSecurityRealm(String redmineWebUri, String redmineApiUri, String clientID,  String clientSecret) {
 
-        this.dbms         = StringUtils.isBlank(dbms)         ? Constants.DBMS_MYSQL              : dbms;
-        this.dbServer     = StringUtils.isBlank(dbServer)     ? Constants.DEFAULT_DB_SERVER       : dbServer;
-        this.databaseName = StringUtils.isBlank(databaseName) ? Constants.DEFAULT_DATABASE_NAME   : databaseName;
-
-        if (StringUtils.isBlank(port))
-            this.port = (Constants.DBMS_MYSQL.equals(this.dbms)) ? (Constants.DEFAULT_PORT_MYSQL) : (Constants.DBMS_POSTGRESQL);
-        else
-            this.port = port;
-
-        this.dbUserName   = dbUserName;
-        this.dbPassword   = dbPassword;
-        this.version      = StringUtils.isBlank(version)      ? Constants.VERSION_1_2_0           : version;
-
-        this.loginTable   = StringUtils.isBlank(loginTable)   ? Constants.DEFAULT_LOGIN_TABLE     : loginTable;
-        this.userField    = StringUtils.isBlank(userField)    ? Constants.DEFAULT_USER_FIELD      : userField;
-        this.passField    = StringUtils.isBlank(passField)    ? Constants.DEFAULT_PASSWORD_FIELD  : passField;
-        this.saltField    = StringUtils.isBlank(saltField)    ? Constants.DEFAULT_SALT_FIELD      : saltField;
-        this.apiToken    = StringUtils.isBlank(apiToken)    ? Constants.DEFAULT_API_TOKEN      : apiToken;
+        this.redmineWebUri  = StringUtils.isBlank(redmineWebUri)     ? Constants.REDMINE_WEBURI       : redmineWebUri;
+        this.redmineApiUri  = StringUtils.isBlank(redmineApiUri)     ? Constants.REDMINE_APIURI       : redmineApiUri;
+        this.clientID       = StringUtils.isBlank(clientID)          ? Constants.CLIENT_ID            : clientID;
+        this.clientSecret   = StringUtils.isBlank(clientSecret)      ? Constants.CLIENT_SECRET        : clientSecret;
     }
 
+    public HttpResponse doCommenceLogin(StaplerRequest request, @Header("Referer") final String referer) throws IOException {
+        // 2. Requesting authorization :
+        
+        List<NameValuePair> parameters = new ArrayList<>();
+        parameters.add(new BasicNameValuePair("redirect_uri", buildRedirectUrl(request, referer)));
+        parameters.add(new BasicNameValuePair("response_type", "code"));
+        parameters.add(new BasicNameValuePair("client_id", clientID));
+
+        return new HttpRedirect(redmineWebUri + "/oauth/authorize?" + URLEncodedUtils.format(parameters, StandardCharsets.UTF_8));
+    }
+
+    private String buildRedirectUrl(StaplerRequest request, String referer) throws MalformedURLException {
+        URL currentUrl = new URL(request.getRequestURL().toString());
+        List<NameValuePair> parameters = new ArrayList<NameValuePair>();
+        parameters.add(new BasicNameValuePair("state", referer));
+
+        URL redirect_uri = new URL(currentUrl.getProtocol(), currentUrl.getHost(), currentUrl.getPort(),
+                request.getContextPath() + "/securityRealm/finishLogin?" + URLEncodedUtils.format(parameters, StandardCharsets.UTF_8));
+        return redirect_uri.toString();
+    }
+
+    /**
+     * This is where the user comes back to at the end of the OpenID redirect
+     * ping-pong.
+     */
+    public HttpResponse doFinishLogin(StaplerRequest request) throws IOException {
+        String code = request.getParameter("code");
+        //LOGGER.info("laihh    doFinishLogin");
+        if (StringUtils.isBlank(code)) {
+            LOGGER.info("doFinishLogin: missing code or private_token.");
+            return HttpResponses.redirectToContextRoot();
+        }
+
+        String state = request.getParameter("state");
+
+        HttpPost httpPost = new HttpPost(redmineWebUri + "/oauth/token");
+        List<NameValuePair> parameters = new ArrayList<NameValuePair>();
+        parameters.add(new BasicNameValuePair("client_id", clientID));
+        parameters.add(new BasicNameValuePair("client_secret", clientSecret));
+        parameters.add(new BasicNameValuePair("code", code));
+        parameters.add(new BasicNameValuePair("grant_type", "authorization_code"));
+        parameters.add(new BasicNameValuePair("redirect_uri", buildRedirectUrl(request, state)));
+        httpPost.setEntity(new UrlEncodedFormEntity(parameters, StandardCharsets.UTF_8));
+
+        CloseableHttpClient httpclient = HttpClients.createDefault();
+        HttpHost proxy = getProxy(httpPost);
+        if (proxy != null) {
+            RequestConfig config = RequestConfig.custom()
+                    .setProxy(proxy)
+                    .build();
+            httpPost.setConfig(config);
+        }
+
+        org.apache.http.HttpResponse response = httpclient.execute(httpPost);
+
+        HttpEntity entity = response.getEntity();
+
+        String content = EntityUtils.toString(entity);
+
+        // When HttpClient instance is no longer needed,
+        // shut down the connection manager to ensure
+        // immediate deallocation of all system resources
+        httpclient.close();
+
+        String login = extract(content ,"name");
+
+        if (StringUtils.isNotBlank(login)) {
+
+            // only set the access token if it exists.
+            RedmineAuthenticationToken auth = new RedmineAuthenticationToken(login);
+            SecurityContextHolder.getContext().setAuthentication(auth);
+
+            //GitlabUser self = auth.getMyself();
+            User user = User.current();
+            if (user != null) {
+                user.setFullName(extract(content ,"login"));
+                //LOGGER.info(user.getApi());
+                //user.setApiToken(extract(content ,"access_token"));
+                // Set email from gitlab only if empty
+            //    if (!user.getProperty(Mailer.UserProperty.class).hasExplicitlyConfiguredAddress()) {
+            //        user.addProperty(new Mailer.UserProperty(auth.getMyself().getEmail()));
+            //    }
+            } 
+            //SecurityListener.fireAuthenticated(new GitLabOAuthUserDetails(self, auth.getAuthorities()));
+        } else {
+            LOGGER.info("Redmine did not return an access token.");
+        }
+
+        if (StringUtils.isNotBlank(state)) {
+            return HttpResponses.redirectTo(state);
+        }
+        return HttpResponses.redirectToContextRoot();
+    }
+
+    /**
+     * Returns the proxy to be used when connecting to the given URI.
+     */
+    private HttpHost getProxy(HttpUriRequest method) throws URIException {
+        Jenkins jenkins = Jenkins.getInstance();
+        ProxyConfiguration proxy = jenkins.proxy;
+        if (proxy == null) {
+            return null; // defensive check
+        }
+
+        Proxy p = proxy.createProxy(method.getURI().getHost());
+        switch (p.type()) {
+            case DIRECT:
+                return null; // no proxy
+            case HTTP:
+                InetSocketAddress sa = (InetSocketAddress) p.address();
+                return new HttpHost(sa.getHostName(), sa.getPort());
+            case SOCKS:
+            default:
+                return null; // not supported yet
+        }
+    }
+
+    private String extract(String content, String key) {
+
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode jsonTree = mapper.readTree(content);
+            JsonNode node = jsonTree.get(key);
+            if (node != null) {
+                return node.asText();
+            }
+        } catch (IOException e) {
+            Log.error(e.getMessage(), e);
+        }
+        return null;
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see hudson.security.SecurityRealm#allowsSignup()
+     */
+    @Override
+    public boolean allowsSignup() {
+        return false;
+    }
+
+    @Override
+    public SecurityComponents createSecurityComponents() {
+        return new SecurityComponents(new AuthenticationManager() {
+
+            @Override
+            public Authentication authenticate(Authentication authentication) throws AuthenticationException {
+                if (authentication instanceof RedmineAuthenticationToken) {
+                    return authentication;
+                }
+                if (authentication instanceof UsernamePasswordAuthenticationToken) {
+                    try {
+                        UsernamePasswordAuthenticationToken token = (UsernamePasswordAuthenticationToken) authentication;
+                        String username = "";
+                        
+                        if ( clientSecret.equals( token.getCredentials().toString() ) ) {
+                            username = token.getPrincipal().toString();
+                        } 
+                        RedmineAuthenticationToken redmine = new RedmineAuthenticationToken(username);
+                        SecurityContextHolder.getContext().setAuthentication(redmine);
+                        return redmine;
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+                throw new BadCredentialsException("Unexpected authentication type: " + authentication);
+            }
+        }, new UserDetailsService() {
+            @Override
+
+            public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException, DataAccessException {
+                return RedmineSecurityRealm.this.loadUserByUsername(username);
+            }
+        });
+    }
+
+    @Override
+    public String getLoginUrl() {
+        return "securityRealm/commenceLogin";
+    }
+
+    @Override
+    protected String getPostLogOutUrl(StaplerRequest req, Authentication auth) {
+        // if we just redirect to the root and anonymous does not have Overall read then we will start a login all over again.
+        // we are actually anonymous here as the security context has been cleared
+        Jenkins jenkins = Jenkins.getInstance();
+        assert jenkins != null;
+        if (jenkins.hasPermission(Jenkins.READ)) {
+            return super.getPostLogOutUrl(req, auth);
+        }
+        return req.getContextPath() + "/" + RedmineLogoutAction.POST_LOGOUT_URL;
+    }
 
     public static final class DescriptorImpl extends Descriptor<SecurityRealm> {
         @Override
@@ -112,262 +303,52 @@ public class RedmineSecurityRealm extends AbstractPasswordBasedSecurityRealm {
         }
         @Override
         public String getDisplayName() {
-        	return "Redmine User Auth";
-        	//return Messages.RedmineSecurityRealm_DisplayName();
+            return "Redmine User Auth";
+            //return Messages.RedmineSecurityRealm_DisplayName();
         }
     }
-
 
     @Extension
     public static DescriptorImpl install() {
         return new DescriptorImpl();
     }
 
-    /**
-     *
-     * @author Yasuyuki Saito
-     */
-    class Authenticator extends AbstractUserDetailsAuthenticationProvider {
-        @Override
-        protected void additionalAuthenticationChecks(UserDetails userDetails, UsernamePasswordAuthenticationToken authentication) throws AuthenticationException {
-
-        }
-
-        @Override
-        protected UserDetails retrieveUser(String username, UsernamePasswordAuthenticationToken authentication) throws AuthenticationException {
-            return RedmineSecurityRealm.this.authenticate(username, authentication.getCredentials().toString());
-        }
-    }
-
-    /**
-     *
-     * @param username Login UserName
-     * @param password Login Password
-     */
-    @Override
-    protected UserDetails authenticate(String username, String password) throws AuthenticationException {
-        AbstractAuthDao dao = null;
-
-        try {
-            dao = createAuthDao(this.dbms);
-
-            LOGGER.info("Redmine DBMS      : " + this.dbms);
-            LOGGER.info("DB Server         : " + this.dbServer);
-            LOGGER.info("DB Port           : " + this.port);
-            LOGGER.info("Database Name     : " + this.databaseName);
-            dao.open(this.dbServer, this.port, this.databaseName, this.dbUserName, this.dbPassword);
-
-            if (!dao.isTable(this.loginTable))
-                throw new RedmineAuthenticationException("RedmineSecurity: Invalid Login Table");
-            
-            if (!dao.isField(this.loginTable, this.userField))
-                throw new RedmineAuthenticationException("RedmineSecurity: Invalid User Field");
-            //Gionee laihh start
-            
-            if (this.apiToken.trim().equals("true")) {
-            	if (!dao.isTable("tokens"))
-                    throw new RedmineAuthenticationException("RedmineSecurity: Invalid Token Table");
-                if (!dao.isField("tokens","value"))
-                    throw new RedmineAuthenticationException("RedmineSecurity: Invalid Token Value Field");
-            }
-            
-            RedmineUserData userData = dao.getRedmineUserData(this.loginTable, this.userField, this.passField, Constants.VERSION_1_2_0.equals(this.version) ? this.saltField : null, username, this.apiToken);
-           //Gionee laihh end
-            if (userData == null) {
-                LOGGER.warning("RedmineSecurity: Invalid Username");
-                throw new UsernameNotFoundException("RedmineSecurity: User not found");
-            }
-            
-            String encryptedPassword = "";
-            if (Constants.VERSION_1_2_0.equals(this.version)) {
-                encryptedPassword = CipherUtil.encodeSHA1(userData.getSalt() + CipherUtil.encodeSHA1(password));
-            } else if (Constants.VERSION_1_1_3.equals(this.version)) {
-                encryptedPassword =  CipherUtil.encodeSHA1(password);
-            }
-            LOGGER.info("Redmine Version   : " + this.version);
-            LOGGER.info("User Name         : " + username);
-            LOGGER.info("Encrypted Password: " + encryptedPassword);
-            if (!userData.getPassword().equals(encryptedPassword)) {
-            	if (!this.apiToken.trim().equals("true")) {
-	                LOGGER.warning("RedmineSecurity: Invalid Password");
-	                throw new RedmineAuthenticationException("RedmineSecurity: Invalid Password");
-            	} else {
-            		//Gionee laihh start
-            		if (!userData.getApitoken().equals(password)) {
-    	                LOGGER.warning("RedmineSecurity: Invalid Password");
-    	                throw new RedmineAuthenticationException("RedmineSecurity: Invalid Password");
-                	}
-            		//Gionee laihh end
-            	}
-            }
-
-            return getUserDetails(username, userData.getPassword());
-        } catch (AuthenticationException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RedmineAuthenticationException("RedmineSecurity: System.Exception", e);
-        } finally {
-            if (dao != null) dao.close();
-        }
-    }
-
-    @Override
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException, DataAccessException {
-        AbstractAuthDao dao = null;
-
-        try {
-            dao = createAuthDao(this.dbms);
-
-            dao.open(this.dbServer, this.port, this.databaseName, this.dbUserName, this.dbPassword);
-
-            if (!dao.isTable(this.loginTable))
-                throw new RedmineAuthenticationException("RedmineSecurity: Invalid Login Table");
-
-            if (!dao.isField(this.loginTable, this.userField))
-                throw new RedmineAuthenticationException("RedmineSecurity: Invalid User Field");
-
-            RedmineUserData userData = dao.getRedmineUserData(this.loginTable, this.userField, this.passField, Constants.VERSION_1_2_0.equals(this.version) ? this.saltField : null, username,this.apiToken);
-
-            if (userData == null) {
-                LOGGER.warning("RedmineSecurity: Invalid Username");
-                throw new UsernameNotFoundException("RedmineSecurity: User not found");
-            }
-
-            return getUserDetails(username, userData.getPassword());
-        } catch (AuthenticationException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RedmineAuthenticationException("RedmineSecurity: System.Exception", e);
-        } finally {
-            if (dao != null) dao.close();
-        }
-    }
-
-    /**
-     * Create Auth Dao
-     * @param  dbms
-     * @return
-     */
-    private AbstractAuthDao createAuthDao(String dbms) {
-        if (Constants.DBMS_MYSQL.equals(dbms))
-            return new MySQLAuthDao();
-        else if (Constants.DBMS_POSTGRESQL.equals(dbms))
-            return new PostgreSQLAuthDao();
-        else
-            return null;
-    }
-
-    @Override
-    public GroupDetails loadGroupByGroupname(String groupname) throws UsernameNotFoundException, DataAccessException {
-        throw new UsernameNotFoundException("RedmineSecurityRealm: Non-supported function");
-    }
-
-    /**
-     *
-     * @param username
-     * @param password
-     * @return
-     */
-    private UserDetails getUserDetails(String username, String password) {
-        Set<GrantedAuthority> groups = new HashSet<GrantedAuthority>();
-        groups.add(SecurityRealm.AUTHENTICATED_AUTHORITY);
-        return new RedmineUserDetails(username, password, true, true, true, true, groups.toArray(new GrantedAuthority[groups.size()]));
-    }
-
-
-    /**
-     *
-     * @return
-     */
-    public String getDbms() {
-        return dbms;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getDbServer() {
-        return dbServer;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getDatabaseName() {
-        return databaseName;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getPort() {
-        return port;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getDbUserName() {
-        return dbUserName;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getDbPassword() {
-        return dbPassword;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getVersion() {
-        return version;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getLoginTable() {
-        return loginTable;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getUserField() {
-        return userField;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getPassField() {
-        return passField;
-    }
-
-    /**
-     *
-     * @return
-     */
-    public String getSaltField() {
-        return saltField;
-    }
     
+
+    
+
+
     /**
-    * laihh
-    * @return
-    */
-   public String getapiToken() {
-       return apiToken;
-   }
+     *
+     * @return
+     */
+    public String getRedmineWebUri() {
+        return redmineWebUri;
+    }
+
+    /**
+     *
+     * @return
+     */
+    public String getRedmineApiUri() {
+        return redmineApiUri;
+    }
+
+    /**
+     *
+     * @return
+     */
+    public String getClientID() {
+        return clientID;
+    }
+
+    /**
+     *
+     * @return
+     */
+    public String getClientSecret() {
+        return clientSecret;
+    }
+
+    
 }
