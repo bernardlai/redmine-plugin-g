@@ -1,5 +1,9 @@
 language: java
 
-install:
+build:
+  - echo "laihh"
+  - echo "lll"
+  
+test:
   - echo "laihh"
   - echo "lll"
