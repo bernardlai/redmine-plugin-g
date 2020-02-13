@@ -1,9 +1,9 @@
 language: java
 
-build:
+script:
   - echo "laihh"
   - echo "lll"
   
-test:
+script:
   - echo "laihh"
   - echo "lll"
